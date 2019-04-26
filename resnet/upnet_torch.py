@@ -1,12 +1,8 @@
 import os
 import random
 
-import tensorflow as tf
-from keras import Model, Input
-
-from keras.layers import Conv1D, Dropout, LeakyReLU, Activation, merge, BatchNormalization
-from keras.layers import Dense
-from keras.backend import transpose
+import torch
+import torch.nn as nn
 
 from scipy.io import wavfile
 import numpy as np
@@ -39,12 +35,11 @@ def SubPixel1D(I, r):
     Calls a tensorflow function that directly implements this functionality.
     We assume input has dim (batch, width, r)
     """
-    with tf.name_scope('subpixel'):
-        b , w, r = I.get_shape()
-        X = transpose(I, [2, 1, 0])  # (r, w, b)
-        X = keras.layers.reshape(X, (1, r*w, b))  # (1, r*w, b)
-        X = transpose(X, [2, 1, 0])
-        return X
+      b , w, r = I.size()
+      X = X.permute(2, 1, 0)  # (r, w, b)
+      X = X.view(1, r*w, b)  # (1, r*w, b)
+      X = X.permute(2, 1, 0)
+      return X
 
 def load_raw_input(fname, fs):
   # Reduce bitrate of audio
@@ -67,59 +62,56 @@ class UpNet:
         self.r = 2
         self.layers = num_layers
 
-        self.input = Input(shape=(batch_size, input_length, 1))
-        print(self.input.get_shape())
-        x = self.input
 
-        with tf.name_scope('generator'):
-            n_filters = [128, 256, 512, 512, 512, 512, 512, 512]
-            n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
-            downsampling_l = []
+        n_filters = [128, 256, 512, 512, 512, 512, 512, 512]
+        n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
+        downsampling_l = []
 
-            print('Generating model')
+        print('Generating model')
 
-            # Downsampling layers
-            for l, nf, fs in zip(range(num_layers), n_filters, n_filtersizes):
-                with tf.name_scope('downsc_conv%d' % l):
-                    x = Conv1D(nf, fs, input_shape=x.shape,strides=2)(x)
-                    x = LeakyReLU(0.2)(x)
-                    print('D-Block: ', x.get_shape(), downsampling_l.append(x))
+        # Downsampling layers
+        self.conv_before = []
+        for l, nf, fs in zip(range(num_layers), n_filters, n_filtersizes):
+          conv = nn.Conv1D(1, nf, fs, stride=2)
+          relu = nn.leaky_relu(0.2)(x)
+          self.conv_before.append((conv, relu))
+          print('D-Block: ', x.get_shape(), downsampling_l.append(x))
 
-            # bottleneck layer
-            with tf.name_scope('bottleneck_conv'):
-                x = (Conv1D(n_filters[-1], n_filtersizes[-1], strides=2))(x)
-                x = Dropout(0.5)(x)
+        # bottleneck layer
+        with tf.name_scope('bottleneck_conv'):
+            x = (Conv1D(n_filters[-1], n_filtersizes[-1], strides=2))(x)
+            x = Dropout(0.5)(x)
+            x = BatchNormalization()(x)
+            x = LeakyReLU(0.2)(x)
+
+        # upsampling layers
+        for l, nf, fs, l_in in reversed(list(zip(
+                range(num_layers), n_filters, n_filtersizes, downsampling_l
+        ))):
+            with tf.name_scope('upsc_conv%d' % l):
+                # (-1, n/2, 2f)
+                x = (Conv1D(2 * nf, fs))(x)
                 x = BatchNormalization()(x)
-                x = LeakyReLU(0.2)(x)
-
-            # upsampling layers
-            for l, nf, fs, l_in in reversed(list(zip(
-                    range(num_layers), n_filters, n_filtersizes, downsampling_l
-            ))):
-                with tf.name_scope('upsc_conv%d' % l):
-                    # (-1, n/2, 2f)
-                    x = (Conv1D(2 * nf, fs))(x)
-                    x = BatchNormalization()(x)
-                    x = Dropout(0.5)(x)
-                    x = Activation('relu')(x)
-                    
-                    # (-1, n, f)
-                    x = SubPixel1D(x, 2)
-                    x = merge.concatenate([x, l_in], axis=1) 
-                    # (-1, n, 2f)
-                    print('U-Block: ', x.get_shape())
-
-            # final conv layer
-            with tf.name_scope('lastconv'):
-                x = Conv1D(2, 9)(x)
+                x = Dropout(0.5)(x)
+                x = Activation('relu')(x)
+                
+                # (-1, n, f)
                 x = SubPixel1D(x, 2)
-                print(x.get_shape())
-            
+                x = merge.concatenate([x, l_in], axis=1) 
+                # (-1, n, 2f)
+                print('U-Block: ', x.get_shape())
 
-            self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
-            
-            # self.output = x
-            self.model = Model(inputs=self.input, outputs=self.predictions)
+        # final conv layer
+        with tf.name_scope('lastconv'):
+            x = Conv1D(2, 9)(x)
+            x = SubPixel1D(x, 2)
+            print(x.get_shape())
+        
+
+        self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
+        
+        # self.output = x
+        self.model = Model(inputs=self.input, outputs=self.predictions)
 
 
 def train(epochs=1, model_name=None):

@@ -1,0 +1,6 @@
+{
+    "FILESERVER_URL": "fileserver.brianlevis.com",
+    "FILESERVER_DIR": "/BRIANDISK/tensorpros",
+    "FILESERVER_USER": "cs182",
+    "FILESERVER_PASSWORD": "donkeyballs"
+}
