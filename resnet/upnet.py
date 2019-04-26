@@ -16,7 +16,7 @@ from subprocess import call
 INPUT_SAMPLE_RATE = 1000
 OUTPUT_SAMPLE_RATE = 2000
 SAMPLE_LENGTH = 1
-ROOTDIR = '/Volumes/fileserver.brianlevis.com/BRIANDISK/tensorpros/fma_small/'
+ROOTDIR = './'
 
 
 
@@ -55,7 +55,6 @@ def load_raw_input(fname, fs):
   if new_dtype != audio.dtype:
       current_range, new_range = DTYPE_RANGES[audio.dtype], DTYPE_RANGES[new_dtype]
       audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
-  #Each sample is SPLIT length long, so we need to split into chunks of SPLIT * 2
   print("Done loading!")
   call(['rm', fname])
   return audio

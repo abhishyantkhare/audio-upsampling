@@ -4,6 +4,8 @@ import random
 import torch
 import torch.nn as nn
 
+import torch.nn.functional as F
+
 from scipy.io import wavfile
 import numpy as np
 from fileserver import Fileserver
@@ -35,11 +37,11 @@ def SubPixel1D(I, r):
     Calls a tensorflow function that directly implements this functionality.
     We assume input has dim (batch, width, r)
     """
-      b , w, r = I.size()
-      X = X.permute(2, 1, 0)  # (r, w, b)
-      X = X.view(1, r*w, b)  # (1, r*w, b)
-      X = X.permute(2, 1, 0)
-      return X
+    b , w, r = I.size()
+    X = X.permute(2, 1, 0)  # (r, w, b)
+    X = X.view(1, r*w, b)  # (1, r*w, b)
+    X = X.permute(2, 1, 0)
+    return X
 
 def load_raw_input(fname, fs):
   # Reduce bitrate of audio
@@ -71,88 +73,139 @@ class UpNet:
 
         # Downsampling layers
         self.conv_before = []
-        for l, nf, fs in zip(range(num_layers), n_filters, n_filtersizes):
-          conv = nn.Conv1D(1, nf, fs, stride=2)
-          relu = nn.leaky_relu(0.2)(x)
-          self.conv_before.append((conv, relu))
-          print('D-Block: ', x.get_shape(), downsampling_l.append(x))
+        for i, l, nf, fs in enumerate(zip(range(num_layers), n_filters, n_filtersizes)):
+          if i == 0:
+            conv = nn.Conv1D(1, nf, fs, stride=2)
+          else:
+            conv = nn.Conv1D(n_filters[i-1], nf, fs, stride=2)
+          self.conv_before.append(conv)
 
         # bottleneck layer
-        with tf.name_scope('bottleneck_conv'):
-            x = (Conv1D(n_filters[-1], n_filtersizes[-1], strides=2))(x)
-            x = Dropout(0.5)(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(0.2)(x)
+        self.bottleneck = nn.Conv1D(nfilters[-1], n_filters[-1], n_filtersizes[-1], strides=2)
+        self.bottleneck_dropout = nn.Dropout(p=0.5)
+        self.bottleneck_bn = nn.BatchNormalization()
+        # x = LeakyReLU(0.2)(x)
 
         # upsampling layers
-        for l, nf, fs, l_in in reversed(list(zip(
+        self.up_convs = []
+        for i, l, nf, fs, l_in in enumerate(reversed(list(zip(
                 range(num_layers), n_filters, n_filtersizes, downsampling_l
-        ))):
-            with tf.name_scope('upsc_conv%d' % l):
-                # (-1, n/2, 2f)
-                x = (Conv1D(2 * nf, fs))(x)
-                x = BatchNormalization()(x)
-                x = Dropout(0.5)(x)
-                x = Activation('relu')(x)
-                
-                # (-1, n, f)
-                x = SubPixel1D(x, 2)
-                x = merge.concatenate([x, l_in], axis=1) 
-                # (-1, n, 2f)
-                print('U-Block: ', x.get_shape())
+        )))):
+              # (-1, n/2, 2f)
+            if i == 0:
+              conv = nn.Conv1D(n_filters[-1], 2 * nf, fs)
+            else:
+              conv = nn.Conv1D(n_filters[-i], 2*nf, fs)
+            self.up_convs.append((conv, l_in))
+            
+            # x = BatchNormalization()(x)
+            # x = Dropout(0.5)(x)
+            # x = Activation('relu')(x)
+            
+            # (-1, n, f)
+            # subpix = SubPixel1D(x, 2)
+            # x = merge.concatenate([x, l_in], axis=1) 
+            # (-1, n, 2f)
 
         # final conv layer
-        with tf.name_scope('lastconv'):
-            x = Conv1D(2, 9)(x)
-            x = SubPixel1D(x, 2)
-            print(x.get_shape())
-        
+        self.final_conv = Conv1D(n_filters[0], 2, 9)
+        self.output_fc = nn.Linear(x.size()[1], output_length)
 
-        self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
+          # x = SubPixel1D(x, 2)
+          # print(x.size())
+
+
+        # self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
         
         # self.output = x
-        self.model = Model(inputs=self.input, outputs=self.predictions)
+        # self.model = Model(inputs=self.input, outputs=self.predictions)
+
+    def forward(self, x):
+      for conv in self.conv_before:
+        x = conv(x)
+      x = self.bottleneck(x)
+      x = self.bottleneck_dropout(x)
+      x = self.bottleneck_bn(x)
+      for conv, l_in in self.up_convs:
+        x = conv(x)
+        x = SubPixel1D(x, 2)
+        x = torch.cat((x, l_in), 1)
+      x = self.final_conv(x)
+      x = self.output_fc(x)
+      return x 
 
 
-def train(epochs=1, model_name=None):
+def load_files():
     
-    # Initialize list of available data
-    # input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
-    # output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
-    fs = Fileserver()
+  # Initialize list of available data
+  # input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
+  # output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
+  print("Loading FS")
+  fs = Fileserver()
+  print("Done Loading")
 
-    input_directory_name = ROOTDIR + 'overfit_wav_input/'
-    output_directory_name = ROOTDIR + 'overfit_wav_output/'
-    
-    input_dir = os.listdir(input_directory_name)[:20]
-    output_dir = os.listdir(output_directory_name)[:20]
-    fs.cd('overfit_wav_input')
-    input_files = [load_raw_input(fn, fs) for fn in input_dir]
-    fs.cd('../overfit_wav_output')
-    output_files = [load_raw_input(fn, fs) for fn in output_dir]
-    print(len(input_files[0]))
-    # assert len(input_files) == len(output_files)
-    # assert all([fn.endswith('.wav') for fn in input_files + output_files])
-    pairs = list(zip(input_files, output_files))
-    random.seed(0)
-    random.shuffle(pairs)
-    if model_name is None:
-        # Initialize model
-        upnet = UpNet(
-            int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH),
-            int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH),
-        )
-    else:
-        # Load model from file
-        upnet = None
+  
+  fs.cd('overfit_wav_input')
+  print(fs.ls())
+  input_files = [load_raw_input(fn, fs) for fn in fs.ls()]
+  fs.cd('../overfit_wav_output')
+  output_files = [load_raw_input(fn, fs) for fn in fs.ls()]
+  print(len(input_files[0]))
+  # assert len(input_files) == len(output_files)
+  # assert all([fn.endswith('.wav') for fn in input_files + output_files])
+  pairs = list(zip(input_files, output_files))
+  random.seed(0)
+  random.shuffle(pairs)
+  return input_files, output_files
+   
     # Train
-    upnet.model.compile(
-        optimizer='adam', loss='mean_squared_error', metrics=['accuracy']
+
+def load_model(model_name=None):
+  if model_name is None:
+    # Initialize model
+    upnet = UpNet(
+        int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH),
+        int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH),
     )
-    upnet.model.fit(input_files,output_files, epochs=1,verbose=2)
+  else:
+        # Load model from file
+    upnet = None
+    # Loss and optimizer
+  criterion =  nn.MSELoss()
+  optimizer = torch.optim.Adam(upnet.parameters(), lr=1e-3,weight_decay=.01)
+  scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma = 0.95)
+  return upnet, criterion, optimizer, scheduler
+
+def train(model_data, data, num_epochs = 1):
+  model, criterion, optimizer, scheduler = model_data
+  for epoch in range(num_epochs):
+    # Training
+    print('epoch {}'.format(epoch))
+
+    for i, input_file, output_file in enumerate(data):
+        # Transfer to GPU
+        model.train()
+        optimizer.zero_grad()
+
+        # Forward pass
+        outputs = model.forward(input_file)
+        loss = criterion(outputs, output_file)
+        # Backward and optimize
+        loss.backward()
+        optimizer.step()
+
+        if (i) % 25 == 0:
+            model.eval()
+            print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}'
+                   .format(epoch+1, num_epochs, i+1, len(data), loss.item()))
+           
+    scheduler.step()
+   
 
 
 def eval():
     pass
 
-train()
+data = load_files()
+model_data = load_model()
+train(model_data, data)
