@@ -46,6 +46,7 @@ def SubPixel1D(I, r):
 def load_raw_input(fname, fs):
   # Reduce bitrate of audio
   print("Loading audio from ", fname)
+  fname = fname.split("/")[1]
   fs.download(fname)
   fs_rate, audio = wavfile.read(fname)
   new_dtype = BITS_TO_DTYPE[8]
@@ -146,7 +147,6 @@ def load_files():
 
   
   fs.cd('overfit_wav_input')
-  print(fs.ls())
   input_files = [load_raw_input(fn, fs) for fn in fs.ls()]
   fs.cd('../overfit_wav_output')
   output_files = [load_raw_input(fn, fs) for fn in fs.ls()]
