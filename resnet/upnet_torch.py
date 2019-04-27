@@ -38,14 +38,16 @@ def SubPixel1D(I, r):
     We assume input has dim (batch, width, r)
     """
     b , w, r = I.size()
-    X = X.permute(2, 1, 0)  # (r, w, b)
-    X = X.view(1, r*w, b)  # (1, r*w, b)
+    X = I.permute(2, 1, 0)  # (r, w, b)
+    X = X.reshape(1, r*w, b)  # (1, r*w, b)
     X = X.permute(2, 1, 0)
     return X
 
 def load_raw_input(fname, fs):
   # Reduce bitrate of audio
   print("Loading audio from ", fname)
+  fname = fname.split("/")[1]
+  print(fname)
   fs.download(fname)
   fs_rate, audio = wavfile.read(fname)
   new_dtype = BITS_TO_DTYPE[8]
@@ -58,45 +60,47 @@ def load_raw_input(fname, fs):
   return audio
 
 
-class UpNet:
+class UpNet(nn.Module):
     def __init__(self, input_length, output_length, num_layers=4,
                  batch_size=128, learning_rate=1e-4, b1=0.99, b2=0.999):
+        super(UpNet, self).__init__()
         self.r = 2
         self.layers = num_layers
+        self.input_length = input_length
+        self.output_length = output_length
 
-
-        n_filters = [128, 256, 512, 512, 512, 512, 512, 512]
+        n_filters = [128, 256, 512, 512]
         n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
-        downsampling_l = []
 
         print('Generating model')
 
         # Downsampling layers
         self.conv_before = []
-        for i, l, nf, fs in enumerate(zip(range(num_layers), n_filters, n_filtersizes)):
+        for i, (l, nf, fs) in enumerate(zip(list(range(num_layers)), n_filters, n_filtersizes)):
           if i == 0:
-            conv = nn.Conv1D(1, nf, fs, stride=2)
+            conv = nn.Conv1d(1, nf, fs, stride=2)
           else:
-            conv = nn.Conv1D(n_filters[i-1], nf, fs, stride=2)
+            conv = nn.Conv1d(n_filters[i-1], nf, fs, stride=2)
           self.conv_before.append(conv)
 
         # bottleneck layer
-        self.bottleneck = nn.Conv1D(nfilters[-1], n_filters[-1], n_filtersizes[-1], strides=2)
+        self.bottleneck = nn.Conv1d(n_filters[-1], n_filters[-1], n_filtersizes[-1], stride=2)
         self.bottleneck_dropout = nn.Dropout(p=0.5)
-        self.bottleneck_bn = nn.BatchNormalization()
+        self.bottleneck_bn = nn.BatchNorm1d(n_filters[-1])
         # x = LeakyReLU(0.2)(x)
 
         # upsampling layers
         self.up_convs = []
-        for i, l, nf, fs, l_in in enumerate(reversed(list(zip(
-                range(num_layers), n_filters, n_filtersizes, downsampling_l
+        for i, (l, nf, fs) in enumerate(reversed(list(zip(
+                range(num_layers), n_filters, n_filtersizes
         )))):
               # (-1, n/2, 2f)
             if i == 0:
-              conv = nn.Conv1D(n_filters[-1], 2 * nf, fs)
+              conv = nn.Conv1d(n_filters[-1], 2 * nf, fs)
             else:
-              conv = nn.Conv1D(n_filters[-i], 2*nf, fs)
-            self.up_convs.append((conv, l_in))
+              conv = nn.Conv1d(n_filters[-i], 2*nf, fs)
+            subpixel = nn.PixelShuffle(2)
+            self.up_convs.append((conv,subpixel))
             
             # x = BatchNormalization()(x)
             # x = Dropout(0.5)(x)
@@ -108,8 +112,8 @@ class UpNet:
             # (-1, n, 2f)
 
         # final conv layer
-        self.final_conv = Conv1D(n_filters[0], 2, 9)
-        self.output_fc = nn.Linear(x.size()[1], output_length)
+        self.final_conv = nn.Conv1d(n_filters[0], 2, 9)
+        self.output_fc = nn.Linear(2968, output_length)
 
           # x = SubPixel1D(x, 2)
           # print(x.size())
@@ -121,16 +125,24 @@ class UpNet:
         # self.model = Model(inputs=self.input, outputs=self.predictions)
 
     def forward(self, x):
+      x = x[:,:,:self.input_length]
+      downsampling_l = [x]
       for conv in self.conv_before:
         x = conv(x)
+        downsampling_l.append(x)
       x = self.bottleneck(x)
       x = self.bottleneck_dropout(x)
       x = self.bottleneck_bn(x)
-      for conv, l_in in self.up_convs:
+      for i, (conv, subpixel) in enumerate(self.up_convs):
         x = conv(x)
-        x = SubPixel1D(x, 2)
-        x = torch.cat((x, l_in), 1)
+        x = x.unsqueeze(2)
+        x = subpixel(x)[0]
+        x = x.view(1, 2*x.size()[0], x.size()[2])
+        l_in = downsampling_l[len(downsampling_l) - 1 - i]
+        x = torch.cat((x, l_in), -1)
       x = self.final_conv(x)
+      x = SubPixel1D(x, 2)
+      x = x.view(x.size()[0], x.size()[1])
       x = self.output_fc(x)
       return x 
 
@@ -147,9 +159,9 @@ def load_files():
   
   fs.cd('overfit_wav_input')
   print(fs.ls())
-  input_files = [load_raw_input(fn, fs) for fn in fs.ls()]
+  input_files = [load_raw_input(fn, fs) for fn in fs.ls()[:10]]
   fs.cd('../overfit_wav_output')
-  output_files = [load_raw_input(fn, fs) for fn in fs.ls()]
+  output_files = [load_raw_input(fn, fs) for fn in fs.ls()[:10]]
   print(len(input_files[0]))
   # assert len(input_files) == len(output_files)
   # assert all([fn.endswith('.wav') for fn in input_files + output_files])
@@ -176,28 +188,34 @@ def load_model(model_name=None):
   scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma = 0.95)
   return upnet, criterion, optimizer, scheduler
 
-def train(model_data, data, num_epochs = 1):
+def train(model_data, data, num_epochs = 10):
+  input_files, output_files = data
   model, criterion, optimizer, scheduler = model_data
+  i = 0
   for epoch in range(num_epochs):
     # Training
     print('epoch {}'.format(epoch))
-
-    for i, input_file, output_file in enumerate(data):
+    for input_file, output_file in zip(input_files, output_files):
         # Transfer to GPU
         model.train()
         optimizer.zero_grad()
 
         # Forward pass
+        input_file = torch.from_numpy(input_file).float()
+        input_file = input_file.view(1, 1, input_file.size()[0])
+        output_file = torch.from_numpy(output_file).float()
+        output_file = output_file[:OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH]
         outputs = model.forward(input_file)
         loss = criterion(outputs, output_file)
         # Backward and optimize
         loss.backward()
         optimizer.step()
 
-        if (i) % 25 == 0:
+        if (i) % 10 == 0:
             model.eval()
             print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}'
-                   .format(epoch+1, num_epochs, i+1, len(data), loss.item()))
+                   .format(epoch+1, num_epochs, i+1, len(input_files), loss.item()))
+        i = i + 1
            
     scheduler.step()
    
