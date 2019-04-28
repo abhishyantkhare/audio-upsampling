@@ -11,11 +11,18 @@ import numpy as np
 from fileserver import Fileserver
 from subprocess import call
 
-INPUT_SAMPLE_RATE = 1000
-OUTPUT_SAMPLE_RATE = 2000
+INPUT_SAMPLE_RATE = 8000
+OUTPUT_SAMPLE_RATE = 44100
 SAMPLE_LENGTH = 1
-ROOTDIR = '/Volumes/fileserver.brianlevis.com/BRIANDISK/tensorpros/fma_small/'
+ROOTDIR = '/Users/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
 
+#TODO:
+# Create validation set
+# Load in data from Brian's disk by mounting it with curlftpfs and reading in filenames with os.listdir(), not the Fileserver object
+# Modify code so it splits up input and output songs into chunks of 1 second each and feeds that into the network, possibly using 
+# the Dataloader object from Pytorch
+# Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
+# Train and see!
 
 
 DTYPE_RANGES = {
@@ -43,12 +50,12 @@ def SubPixel1D(I, r):
     X = X.permute(2, 1, 0)
     return X
 
-def load_raw_input(fname, fs):
+def load_raw_input(fname):
   # Reduce bitrate of audio
   print("Loading audio from ", fname)
   fname = fname.split("/")[1]
   print(fname)
-  fs.download(fname)
+  #fs.download(fname)
   fs_rate, audio = wavfile.read(fname)
   new_dtype = BITS_TO_DTYPE[8]
   if new_dtype != audio.dtype:
@@ -56,7 +63,7 @@ def load_raw_input(fname, fs):
       audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
   #Each sample is SPLIT length long, so we need to split into chunks of SPLIT * 2
   print("Done loading!")
-  call(['rm', fname])
+  #call(['rm', fname])
   return audio
 
 
@@ -128,7 +135,7 @@ class UpNet(nn.Module):
       x = x[:,:,:self.input_length]
       downsampling_l = [x]
       for conv in self.conv_before:
-        x = conv(x)
+        x = F.leaky_relu(conv(x))
         downsampling_l.append(x)
       x = self.bottleneck(x)
       x = self.bottleneck_dropout(x)
@@ -150,18 +157,20 @@ class UpNet(nn.Module):
 def load_files():
     
   # Initialize list of available data
-  # input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
-  # output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
-  print("Loading FS")
-  fs = Fileserver()
-  print("Done Loading")
+  input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
+  output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
+  input_dir = os.listdir(input_directory)
+  output_dir = os.listdir(output_directory)
+  #print("Loading FS")
+  #fs = Fileserver()
+  #print("Done Loading")
 
   
-  fs.cd('overfit_wav_input')
-  print(fs.ls())
-  input_files = [load_raw_input(fn, fs) for fn in fs.ls()[:10]]
-  fs.cd('../overfit_wav_output')
-  output_files = [load_raw_input(fn, fs) for fn in fs.ls()[:10]]
+  #fs.cd('overfit_wav_input')
+  #print(fs.ls())
+  input_files = [load_raw_input(input_directory + fn) for fn in input_dir]
+  #fs.cd('../overfit_wav_output')
+  output_files = [load_raw_input(output_directory + fn) for fn in output_dir]
   print(len(input_files[0]))
   # assert len(input_files) == len(output_files)
   # assert all([fn.endswith('.wav') for fn in input_files + output_files])
@@ -188,7 +197,7 @@ def load_model(model_name=None):
   scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma = 0.95)
   return upnet, criterion, optimizer, scheduler
 
-def train(model_data, data, num_epochs = 10):
+def train(model_data, data, num_epochs = 1000):
   input_files, output_files = data
   model, criterion, optimizer, scheduler = model_data
   i = 0
