@@ -17,12 +17,17 @@ SAMPLE_LENGTH = 1
 ROOTDIR = '/Users/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
 
 #TODO:
-# Create validation set
-# Load in data from Brian's disk by mounting it with curlftpfs and reading in filenames with os.listdir(), not the Fileserver object
-# Modify code so it splits up input and output songs into chunks of 1 second each and feeds that into the network, possibly using 
-# the Dataloader object from Pytorch
+# Mount Brian's disk with curlftpfs : 
+  # Install curlftpfs with Homebrew
+  # Make a directory to load the disk into such as mkdir ~/bdisk
+  # Run sudo curlftpfs -o allow_other cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
+# Create validation set in bdisk:
+  # Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in the val_input folder
+  # Pick all filenames of the form 00*.wav in the wav_44100 folder and put it in the val_output folder
+# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using 
+# the Dataloader object from Pytorch, need to look that up
 # Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
-# Train and see!
+
 
 
 DTYPE_RANGES = {
