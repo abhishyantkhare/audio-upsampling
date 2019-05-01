@@ -1,7 +1,13 @@
+import contextlib
+import json
 import os
+import wave
 
 import scipy.io.wavfile
 import torch.utils.data
+
+
+ANNOTATION_FILE = 'file_sizes.json'
 
 
 class WavData(torch.utils.data.Dataset):
@@ -13,9 +19,7 @@ class WavData(torch.utils.data.Dataset):
         :param sample_length: Length of model input in seconds
         :param path: Path to wav_<Hz>/ folders
         """
-        # TODO: TREAT *SAMPLES* AS ITEMS - NOT WAVS, SO AS TO PROPERLY
-        #       USE TORCH'S DATA UTILS
-        #       I am still working on this
+        print("Initializing loader")
         assert (sample_length * input_rate).is_integer()
         assert (sample_length * output_rate).is_integer()
 
@@ -33,19 +37,47 @@ class WavData(torch.utils.data.Dataset):
             fn for fn in os.listdir(self.output_path) if fn.endswith('.wav')
         ]))
 
+        # Compute number of samples in each file
+        self.file_sizes = {}
+        file_index_path = self.path + ANNOTATION_FILE
+        if os.path.exists(file_index_path):
+            with open(file_index_path, 'r') as fp:
+                self.file_sizes = json.load(fp)
+        for r, p in [
+            (self.input_rate, self.input_path),
+            (self.output_rate, self.output_path)
+        ]:
+            min_length = float('inf')
+            if r not in self.file_sizes:
+                for fn in self.filenames:
+                    with contextlib.closing(wave.open(p + fn, 'r')) as fp:
+                        min_length = min(fp.getnframes(), min_length)
+                assert type(min_length) == int
+                self.file_sizes[r] = min_length
+                with open(file_index_path, 'w') as fp:
+                    json.dump(self.file_sizes, fp)
+
+        self.samples_per_file = min(
+            self.file_sizes[self.input_rate] // self.input_sample_size,
+            self.file_sizes[self.output_rate] // self.output_sample_size
+        )
+
+        self.cache = [None, None, None]
+        print("Loader initialized")
+
     def __len__(self):
-        return len(self.filenames)
+        return len(self.filenames) * self.samples_per_file
 
     def __getitem__(self, index):
-        # Load files
-        _, input_wav = scipy.io.wavfile.read(self.input_path + self.input_rate)
-        _, output_wav = scipy.io.wavfile.read(self.output_path + self.output_rate)
-        # Truncate data
-        num_samples = len(input_wav) // self.input_sample_size
-        input_wav = input_wav[:num_samples * self.input_sample_size].reshape((num_samples, -1))
-        output_wav = output_wav[:num_samples * self.output_sample_size].reshape((num_samples, -1))
-        return input_wav, output_wav
+        filename = self.filenames[index]
+        if self.cache[0] != filename:
+            self.cache[0] = filename
+            _, input_wav = scipy.io.wavfile.read(self.input_path + filename)
+            _, output_wav = scipy.io.wavfile.read(self.output_path + filename)
+            self.cache[1] = input_wav[:self.samples_per_file * self.input_sample_size].reshape((self.samples_per_file, -1))
+            self.cache[2] = output_wav[:self.samples_per_file * self.output_sample_size].reshape((self.samples_per_file, -1))
+        return self.cache[1][index], self.cache[2][index]
 
-    @staticmethod
-    def _load_data_annotation(self):
-        pass
+
+if __name__ == "__main__":
+    dataset = WavData(8000, 44100, 0.5, '/Users/brianlevis/cs182/audio-upsampling/data')
