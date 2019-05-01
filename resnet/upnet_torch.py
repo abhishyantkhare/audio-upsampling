@@ -23,22 +23,25 @@ OUTPUT_LEN = OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH
 
 ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
 
+
 #TODO:
+# Mount Brian's disk with curlftpfs :
+  # Install curlftpfs with Homebrew
+  # Make a directory to load the disk into such as mkdir ~/bdisk
+  # Run sudo curlftpfs -o allow_other cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
 # Create validation set in bdisk:
   # Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in the val_input folder
   # Pick all filenames of the form 00*.wav in the wav_44100 folder and put it in the val_output folder
-# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using 
+# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using
 # the Dataloader object from Pytorch, need to look that up
 # Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
 
-
-
 DTYPE_RANGES = {
-    np.float32: (-1.0, 1.0), np.int32: (-2147483648, 2147483647), 
+    np.dtype('float32'): (-1.0, 1.0), np.dtype('int32'): (-2147483648, 2147483647),
     np.dtype('int16'): (-32768, 32767), np.dtype('uint8'): (0, 255)
 }
 BITS_TO_DTYPE = {
-    64: np.float32, 32: np.int32, 16: np.dtype('int16'), 8: np.dtype('uint8')
+    64: np.dtype('float32'), 32: np.dtype('int32'), 16: np.dtype('int16'), 8: np.dtype('uint8')
 }
 
 
@@ -60,6 +63,7 @@ def SubPixel1D(I, r):
 
 
 
+
 class UpNet(nn.Module):
     def __init__(self, input_length, output_length, num_layers=4,
                  batch_size=128, learning_rate=1e-4, b1=0.99, b2=0.999):
@@ -69,19 +73,21 @@ class UpNet(nn.Module):
         self.input_length = input_length
         self.output_length = output_length
 
-        n_filters = [128, 256, 512, 512]
+        n_filters =     [128, 256, 512, 512]
         n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
-
-        print('Generating model')
 
         # Downsampling layers
         self.conv_before = []
         for i, (l, nf, fs) in enumerate(zip(list(range(num_layers)), n_filters, n_filtersizes)):
           if i == 0:
             conv = nn.Conv1d(1, nf, fs, stride=2)
+            bn = nn.BatchNorm1d(nf)
+            do = nn.Dropout(p = 0.1)
           else:
             conv = nn.Conv1d(n_filters[i-1], nf, fs, stride=2)
-          self.conv_before.append(conv)
+            bn = nn.Batchnorm1d(nf)
+            do = nn.Dropout(p = 0.1)
+          self.conv_before.append((conv, bn, do))
 
         # bottleneck layer
         self.bottleneck = nn.Conv1d(n_filters[-1], n_filters[-1], n_filtersizes[-1], stride=2)
@@ -94,58 +100,112 @@ class UpNet(nn.Module):
         for i, (l, nf, fs) in enumerate(reversed(list(zip(
                 range(num_layers), n_filters, n_filtersizes
         )))):
-              # (-1, n/2, 2f)
             if i == 0:
               conv = nn.Conv1d(n_filters[-1], 2 * nf, fs)
+              bn = nn.Batchnorm1d(2*nf)
+              do = nn.Dropout(p=.1)
             else:
-              conv = nn.Conv1d(n_filters[-i], 2*nf, fs)
+              conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
+              bn = nn.BatchNorm1d(nf)
+              do = nn.Dropout(p=.1)
             subpixel = nn.PixelShuffle(2)
-            self.up_convs.append((conv,subpixel))
-            
-            # x = BatchNormalization()(x)
-            # x = Dropout(0.5)(x)
-            # x = Activation('relu')(x)
-            
-            # (-1, n, f)
-            # subpix = SubPixel1D(x, 2)
-            # x = merge.concatenate([x, l_in], axis=1) 
-            # (-1, n, 2f)
+            self.up_convs.append((conv,subpixel,bn,do))
 
         # final conv layer
         self.final_conv = nn.Conv1d(n_filters[0], 2, 9)
-        self.output_fc = nn.Linear(2968, output_length)
+        self.output_fc = nn.Linear(self.fc_dimensions(n_filters, n_filtersizes), output_length)
 
-          # x = SubPixel1D(x, 2)
-          # print(x.size())
+        print(self.fc_dimensions(n_filters, n_filtersizes))
 
 
-        # self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
-        
-        # self.output = x
-        # self.model = Model(inputs=self.input, outputs=self.predictions)
+    def fc_dimensions(self, n_filters, n_filtersizes):
+        def conv_dims(w, k, s, p=0):
+            out = (w - k + 2 * p) / s + 1.0
+            out = int(out)
+            return out
+
+        def subpixel_dims(shape, r):
+            H = 1
+            _, C, W = shape
+            shape = [1, C / pow(r, 2), H * r, W * r]
+            return shape[1:]
+
+        # self.input_length = 8000
+        shape = [1, 1, self.input_length]
+
+        dl = []
+
+        # down convs
+        for i, (nf, fs) in enumerate(zip(n_filters, n_filtersizes)):
+            _, _, w = shape
+            cd = conv_dims(w=w, k=fs, s=2)
+            dl.append(cd)
+            shape = [1, nf, cd]
+
+        # bottleneck with conv
+        _, _, w = shape
+        shape = [1, n_filters[-1], conv_dims(w=w, k=n_filtersizes[-1], s=2)]
+
+        # upsample
+        for i, (nf, fs, cd) in enumerate(reversed(list(zip(n_filters, n_filtersizes, dl)))):
+            _, _, w = shape
+
+            # up conv
+            shape = [1, 2 * nf, conv_dims(w=w, k=fs, s=1)]
+
+            # subpixel
+            C, H, W = subpixel_dims(shape, 2)
+
+            # view
+            C, H, W = (1, C * H, W)
+
+            # cat
+            C, H, W = (C, H, W + cd)
+
+            shape = [C, H, W]
+
+        # final conv
+        _, _, w = shape
+        w = conv_dims(w=w, k=9, s=1)
+
+        return w * 2
+
+
+
+
+
+
 
     def forward(self, x):
-      x = x[:,:,:self.input_length]
+
+      x = x[:, :, :self.input_length]
+
       downsampling_l = [x]
-      for conv in self.conv_before:
+
+      for (conv, bn, do) in self.conv_before:
         x = F.leaky_relu(conv(x))
+        x = do(bn(x))
         downsampling_l.append(x)
+
       x = self.bottleneck(x)
       x = self.bottleneck_dropout(x)
       x = self.bottleneck_bn(x)
-      for i, (conv, subpixel) in enumerate(self.up_convs):
-        x = conv(x)
+
+      for i, (conv, subpixel, bn, do) in enumerate(self.up_convs):
+        x = do(bn(conv(x)))
         x = x.unsqueeze(2)
         x = subpixel(x)[0]
         x = x.view(1, 2*x.size()[0], x.size()[2])
         l_in = downsampling_l[len(downsampling_l) - 1 - i]
         x = torch.cat((x, l_in), -1)
+
       x = self.final_conv(x)
       x = SubPixel1D(x, 2)
       x = x.view(x.size()[0], x.size()[1])
-      x = self.output_fc(x)
-      return x 
 
+      x = self.output_fc(x)
+
+      return x
 
 
     # Train
@@ -180,22 +240,25 @@ def train(model_data, data, val_data, num_epochs = 1000):
 
         # Forward pass
         outputs = model.forward(input_file)
+        print("Loss")
         loss = criterion(outputs, output_file)
         # Backward and optimize
+        print("Backward")
         loss.backward()
+        print("Step")
         optimizer.step()
-
+          
         if (i) % 100 == 0:
-            val_input, val_output = val_loader.__iter__().__next__()
+            val_input, val_output = val_data.__iter__().__next__()
             model.eval()
             outputs = model.forward(val_input)
-            val_loss = criterion(output, output_file)
-            print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}'
-                   .format(epoch+1, num_epochs, i+1, len(input_files), loss.item()))
+            val_loss = criterion(outputs, val_output)
+            print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}, Val Loss: {:.4f}'
+                   .format(epoch+1, num_epochs, i+1, len(data), loss.item(), val_loss.item()))
         i = i + 1
-           
+
     scheduler.step()
-   
+
 
 
 def eval():
