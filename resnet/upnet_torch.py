@@ -11,7 +11,7 @@ import numpy as np
 from fileserver import Fileserver
 from subprocess import call
 from WavDataset import WavDataset
-from torch.utils.data import Dataloader
+import torch.utils.data   
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100

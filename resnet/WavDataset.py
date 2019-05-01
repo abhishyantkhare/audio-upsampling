@@ -3,6 +3,7 @@ import torch
 from scipy.io import wavfile
 import os
 
+ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
 class WavDataset(Dataset):
 
   def __init__(self, input_dirname, input_chunksize, output_dirname, output_chunksize):
