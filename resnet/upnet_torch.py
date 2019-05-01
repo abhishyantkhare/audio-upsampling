@@ -45,6 +45,11 @@ BITS_TO_DTYPE = {
 }
 
 
+
+# CUDA for PyTorch
+use_cuda = torch.cuda.is_available()
+device = torch.device("cuda:0" if use_cuda else "cpu")
+
 # Network design modeled after
 # https://github.com/kuleshov/audio-super-res
 
@@ -85,7 +90,7 @@ class UpNet(nn.Module):
             do = nn.Dropout(p = 0.1)
           else:
             conv = nn.Conv1d(n_filters[i-1], nf, fs, stride=2)
-            bn = nn.Batchnorm1d(nf)
+            bn = nn.BatchNorm1d(nf)
             do = nn.Dropout(p = 0.1)
           self.conv_before.append((conv, bn, do))
 
@@ -102,7 +107,7 @@ class UpNet(nn.Module):
         )))):
             if i == 0:
               conv = nn.Conv1d(n_filters[-1], 2 * nf, fs)
-              bn = nn.Batchnorm1d(2*nf)
+              bn = nn.BatchNorm1d(2*nf)
               do = nn.Dropout(p=.1)
             else:
               conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
@@ -183,23 +188,23 @@ class UpNet(nn.Module):
       downsampling_l = [x]
 
       for (conv, bn, do) in self.conv_before:
-        x = F.leaky_relu(conv(x))
-        x = do(bn(x))
+        x = F.leaky_relu(conv(x).to(device)).to(device)
+        x = do(bn(x).to(device)).to(device)
         downsampling_l.append(x)
 
-      x = self.bottleneck(x)
-      x = self.bottleneck_dropout(x)
-      x = self.bottleneck_bn(x)
+      x = self.bottleneck(x).to(device)
+      x = self.bottleneck_dropout(x).to(device)
+      x = self.bottleneck_bn(x).to(device)
 
       for i, (conv, subpixel, bn, do) in enumerate(self.up_convs):
-        x = do(bn(conv(x)))
+        x = do(bn(conv(x).to(device)).to(device)).to(device)
         x = x.unsqueeze(2)
         x = subpixel(x)[0]
         x = x.view(1, 2*x.size()[0], x.size()[2])
         l_in = downsampling_l[len(downsampling_l) - 1 - i]
         x = torch.cat((x, l_in), -1)
 
-      x = self.final_conv(x)
+      x = self.final_conv(x).to(device)
       x = SubPixel1D(x, 2)
       x = x.view(x.size()[0], x.size()[1])
 
@@ -216,10 +221,10 @@ def load_model(model_name=None):
     upnet = UpNet(
         int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH),
         int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH),
-    )
+    ).to(device)
   else:
         # Load model from file
-    upnet = None
+    upnet = torch.load(model_name).to(device)
     # Loss and optimizer
   criterion =  nn.MSELoss()
   optimizer = torch.optim.Adam(upnet.parameters(), lr=1e-3,weight_decay=.01)
@@ -235,6 +240,9 @@ def train(model_data, data, val_data, num_epochs = 1000):
     for i, (input_file, output_file) in enumerate(data):
 
         # Transfer to GPU
+        input_file = input_file.to(device)
+        output_file = output_file.to(device)
+
         model.train()
         optimizer.zero_grad()
 
@@ -250,15 +258,22 @@ def train(model_data, data, val_data, num_epochs = 1000):
           
         if (i) % 100 == 0:
             val_input, val_output = val_data.__iter__().__next__()
+            val_input.to(device)
+            val_output.to(device)
             model.eval()
             outputs = model.forward(val_input)
             val_loss = criterion(outputs, val_output)
+            with open('train_log.txt','w') as f:
+              f.write('{}, {}'.format(i, loss.item()))
+            with open('val_log.txt', 'w') as f:
+              f.write('{}, {}').format(i, val_loss.item())
             print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}, Val Loss: {:.4f}'
                    .format(epoch+1, num_epochs, i+1, len(data), loss.item(), val_loss.item()))
         i = i + 1
 
     scheduler.step()
-
+    call(['rm', 'model.ckpt'])
+    torch.save(model.state_dict(), 'model.ckpt')
 
 
 def eval():
