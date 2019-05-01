@@ -1,40 +1,39 @@
-import os
-import random
-
+import numpy as np
 import torch
 import torch.nn as nn
-
 import torch.nn.functional as F
+import torch.utils.data
+from torch.utils.data import DataLoader, Subset
 
-from scipy.io import wavfile
-import numpy as np
-from fileserver import Fileserver
-from subprocess import call
-from WavDataset import WavDataset
-import torch.utils.data   
+from data import WavData
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100
 SAMPLE_LENGTH = 1
 
-INPUT_LEN = INPUT_SAMPLE_RATE*SAMPLE_LENGTH
-OUTPUT_LEN = OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH
+INPUT_LEN = INPUT_SAMPLE_RATE * SAMPLE_LENGTH
+OUTPUT_LEN = OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH
 
+# ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
+ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
 
-ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
-
-
-#TODO:
 # Mount Brian's disk with curlftpfs :
-  # Install curlftpfs with Homebrew
-  # Make a directory to load the disk into such as mkdir ~/bdisk
-  # Run sudo curlftpfs -o allow_other cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
+#   Install curlftpfs with Homebrew
+#   Make a directory to load the disk into such as mkdir ~/bdisk
+#   Run sudo curlftpfs -o allow_other
+#   cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
 # Create validation set in bdisk:
-  # Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in the val_input folder
-  # Pick all filenames of the form 00*.wav in the wav_44100 folder and put it in the val_output folder
-# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using
-# the Dataloader object from Pytorch, need to look that up
-# Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
+#   Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in
+#   the val_input folder
+#   Pick all filenames of the form 00*.wav in the wav_44100 folder and put it
+#   in the val_output folder
+#   Modify code so it splits up input and output songs into chunks of 1 second
+#   and feeds the chunks into the network in batches, possibly using the
+#   Dataloader object from Pytorch, need to look that up
+
+#   Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the
+#   convolutional layers, as per the paper:
+#   https://arxiv.org/pdf/1708.00853.pdf
 
 DTYPE_RANGES = {
     np.dtype('float32'): (-1.0, 1.0), np.dtype('int32'): (-2147483648, 2147483647),
@@ -55,18 +54,11 @@ device = torch.device("cuda:0" if use_cuda else "cpu")
 
 
 def SubPixel1D(I, r):
-    """One-dimensional subpixel upsampling layer
-
-    Calls a tensorflow function that directly implements this functionality.
-    We assume input has dim (batch, width, r)
-    """
-    b , w, r = I.size()
+    b, w, r = I.size()
     X = I.permute(2, 1, 0)  # (r, w, b)
-    X = X.reshape(1, r*w, b)  # (1, r*w, b)
+    X = X.reshape(1, r * w, b)  # (1, r*w, b)
     X = X.permute(2, 1, 0)
     return X
-
-
 
 
 class UpNet(nn.Module):
@@ -78,7 +70,7 @@ class UpNet(nn.Module):
         self.input_length = input_length
         self.output_length = output_length
 
-        n_filters =     [128, 256, 512, 512]
+        n_filters = [128, 256, 512, 512]
         n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
 
         # Downsampling layers
@@ -110,18 +102,17 @@ class UpNet(nn.Module):
               bn = nn.BatchNorm1d(2*nf)
               do = nn.Dropout(p=.1)
             else:
-              conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
-              bn = nn.BatchNorm1d(nf)
-              do = nn.Dropout(p=.1)
+                conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
+                bn = nn.BatchNorm1d(nf)
+                do = nn.Dropout(p=.1)
             subpixel = nn.PixelShuffle(2)
-            self.up_convs.append((conv,subpixel,bn,do))
+            self.up_convs.append((conv, subpixel, bn, do))
 
         # final conv layer
         self.final_conv = nn.Conv1d(n_filters[0], 2, 9)
         self.output_fc = nn.Linear(self.fc_dimensions(n_filters, n_filtersizes), output_length)
 
         print(self.fc_dimensions(n_filters, n_filtersizes))
-
 
     def fc_dimensions(self, n_filters, n_filtersizes):
         def conv_dims(w, k, s, p=0):
@@ -175,17 +166,11 @@ class UpNet(nn.Module):
 
         return w * 2
 
-
-
-
-
-
-
     def forward(self, x):
 
-      x = x[:, :, :self.input_length]
+        x = x[:, :, :self.input_length]
 
-      downsampling_l = [x]
+        downsampling_l = [x]
 
       for (conv, bn, do) in self.conv_before:
         x = F.leaky_relu(conv(x).to(device)).to(device)
@@ -208,12 +193,11 @@ class UpNet(nn.Module):
       x = SubPixel1D(x, 2)
       x = x.view(x.size()[0], x.size()[1])
 
-      x = self.output_fc(x)
+        x = self.output_fc(x)
 
-      return x
+        return x
 
 
-    # Train
 
 def load_model(model_name=None):
   if model_name is None:
@@ -276,8 +260,6 @@ def train(model_data, data, val_data, num_epochs = 1000):
     torch.save(model.state_dict(), 'model.ckpt')
 
 
-def eval():
-    pass
 
 train_input_dir = 'wav_{}/'.format(INPUT_SAMPLE_RATE)
 train_output_dir = 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
@@ -292,3 +274,19 @@ val_dl = Dataloader(val_dataset, batch_size=32, shuffle=True,num_workers=4)
 
 model_data = load_model()
 train(model_data, train_dl, val_dl)
+
+
+if __name__ == "__main__":
+    dataset = WavData(8000, 44100, 0.5, ROOTDIR)
+
+    train_len = int(len(dataset) * 0.8)
+    eval_len = len(dataset) - train_len
+
+    train_dataset = Subset(dataset, (0, train_len))
+    eval_dataset = Subset(dataset, (train_len, eval_len))
+
+    train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
+    val_dl = DataLoader(eval_dataset, batch_size=32, shuffle=True, num_workers=4)
+
+    model_data = load_model()
+    train(model_data, train_dl, val_dl)
