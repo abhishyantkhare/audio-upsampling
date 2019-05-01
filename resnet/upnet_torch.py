@@ -10,17 +10,20 @@ from scipy.io import wavfile
 import numpy as np
 from fileserver import Fileserver
 from subprocess import call
+from WavDataset import WavDataset
+from torch.utils.data import Dataloader
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100
 SAMPLE_LENGTH = 1
-ROOTDIR = '/Users/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
+
+INPUT_LEN = INPUT_SAMPLE_RATE*SAMPLE_LENGTH
+OUTPUT_LEN = OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH
+
+
+ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
 
 #TODO:
-# Mount Brian's disk with curlftpfs : 
-  # Install curlftpfs with Homebrew
-  # Make a directory to load the disk into such as mkdir ~/bdisk
-  # Run sudo curlftpfs -o allow_other cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
 # Create validation set in bdisk:
   # Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in the val_input folder
   # Pick all filenames of the form 00*.wav in the wav_44100 folder and put it in the val_output folder
@@ -55,21 +58,6 @@ def SubPixel1D(I, r):
     X = X.permute(2, 1, 0)
     return X
 
-def load_raw_input(fname):
-  # Reduce bitrate of audio
-  print("Loading audio from ", fname)
-  fname = fname.split("/")[1]
-  print(fname)
-  #fs.download(fname)
-  fs_rate, audio = wavfile.read(fname)
-  new_dtype = BITS_TO_DTYPE[8]
-  if new_dtype != audio.dtype:
-      current_range, new_range = DTYPE_RANGES[audio.dtype], DTYPE_RANGES[new_dtype]
-      audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
-  #Each sample is SPLIT length long, so we need to split into chunks of SPLIT * 2
-  print("Done loading!")
-  #call(['rm', fname])
-  return audio
 
 
 class UpNet(nn.Module):
@@ -159,31 +147,7 @@ class UpNet(nn.Module):
       return x 
 
 
-def load_files():
-    
-  # Initialize list of available data
-  input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
-  output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
-  input_dir = os.listdir(input_directory)
-  output_dir = os.listdir(output_directory)
-  #print("Loading FS")
-  #fs = Fileserver()
-  #print("Done Loading")
 
-  
-  #fs.cd('overfit_wav_input')
-  #print(fs.ls())
-  input_files = [load_raw_input(input_directory + fn) for fn in input_dir]
-  #fs.cd('../overfit_wav_output')
-  output_files = [load_raw_input(output_directory + fn) for fn in output_dir]
-  print(len(input_files[0]))
-  # assert len(input_files) == len(output_files)
-  # assert all([fn.endswith('.wav') for fn in input_files + output_files])
-  pairs = list(zip(input_files, output_files))
-  random.seed(0)
-  random.shuffle(pairs)
-  return input_files, output_files
-   
     # Train
 
 def load_model(model_name=None):
@@ -202,31 +166,30 @@ def load_model(model_name=None):
   scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma = 0.95)
   return upnet, criterion, optimizer, scheduler
 
-def train(model_data, data, num_epochs = 1000):
-  input_files, output_files = data
+def train(model_data, data, val_data, num_epochs = 1000):
   model, criterion, optimizer, scheduler = model_data
   i = 0
   for epoch in range(num_epochs):
     # Training
     print('epoch {}'.format(epoch))
-    for input_file, output_file in zip(input_files, output_files):
+    for i, (input_file, output_file) in enumerate(data):
+
         # Transfer to GPU
         model.train()
         optimizer.zero_grad()
 
         # Forward pass
-        input_file = torch.from_numpy(input_file).float()
-        input_file = input_file.view(1, 1, input_file.size()[0])
-        output_file = torch.from_numpy(output_file).float()
-        output_file = output_file[:OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH]
         outputs = model.forward(input_file)
         loss = criterion(outputs, output_file)
         # Backward and optimize
         loss.backward()
         optimizer.step()
 
-        if (i) % 10 == 0:
+        if (i) % 100 == 0:
+            val_input, val_output = val_loader.__iter__().__next__()
             model.eval()
+            outputs = model.forward(val_input)
+            val_loss = criterion(output, output_file)
             print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}'
                    .format(epoch+1, num_epochs, i+1, len(input_files), loss.item()))
         i = i + 1
@@ -238,6 +201,16 @@ def train(model_data, data, num_epochs = 1000):
 def eval():
     pass
 
-data = load_files()
+train_input_dir = 'wav_{}/'.format(INPUT_SAMPLE_RATE)
+train_output_dir = 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
+train_dataset = WavDataset(train_input_dir, INPUT_LEN, train_output_dir, OUTPUT_LEN)
+train_dl = Dataloader(train_dataset,batch_size=32, shuffle=True,num_workers=4)
+val_input_dir = 'val_input'
+val_output_dir = 'val_output'
+val_dataset = WavDataset(val_input_dir, INPUT_LEN, val_output_dir, OUTPUT_LEN)
+val_dl = Dataloader(val_dataset, batch_size=32, shuffle=True,num_workers=4)
+
+
+
 model_data = load_model()
-train(model_data, data)
+train(model_data, train_dl, val_dl)
