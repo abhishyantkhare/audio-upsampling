@@ -11,27 +11,25 @@ import numpy as np
 from fileserver import Fileserver
 from subprocess import call
 
-INPUT_SAMPLE_RATE = 8000
-OUTPUT_SAMPLE_RATE = 44100
+INPUT_SAMPLE_RATE = 1000
+OUTPUT_SAMPLE_RATE = 2000
 SAMPLE_LENGTH = 1
-ROOTDIR = '/Users/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
+ROOTDIR = '/Users/nicholascai/bdisk/BRIANDISK/tensorpros/fma_small/'
 
 #TODO:
-# Mount Brian's disk with curlftpfs : 
+# Mount Brian's disk with curlftpfs :
   # Install curlftpfs with Homebrew
   # Make a directory to load the disk into such as mkdir ~/bdisk
   # Run sudo curlftpfs -o allow_other cs182:donkeyballs@fileserver.brianlevis.com ~/bdisk
 # Create validation set in bdisk:
   # Pick all filenames of the form 00*.wav in the wav_8000 folder and put it in the val_input folder
   # Pick all filenames of the form 00*.wav in the wav_44100 folder and put it in the val_output folder
-# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using 
+# Modify code so it splits up input and output songs into chunks of 1 second and feeds the chunks into the network in batches, possibly using
 # the Dataloader object from Pytorch, need to look that up
 # Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
 
-
-
 DTYPE_RANGES = {
-    np.float32: (-1.0, 1.0), np.int32: (-2147483648, 2147483647), 
+    np.float32: (-1.0, 1.0), np.int32: (-2147483648, 2147483647),
     np.dtype('int16'): (-32768, 32767), np.dtype('uint8'): (0, 255)
 }
 BITS_TO_DTYPE = {
@@ -57,17 +55,15 @@ def SubPixel1D(I, r):
 
 def load_raw_input(fname):
   # Reduce bitrate of audio
-  print("Loading audio from ", fname)
-  fname = fname.split("/")[1]
-  print(fname)
-  #fs.download(fname)
+
+
   fs_rate, audio = wavfile.read(fname)
   new_dtype = BITS_TO_DTYPE[8]
   if new_dtype != audio.dtype:
       current_range, new_range = DTYPE_RANGES[audio.dtype], DTYPE_RANGES[new_dtype]
       audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
   #Each sample is SPLIT length long, so we need to split into chunks of SPLIT * 2
-  print("Done loading!")
+  print("Done loading", fname)
   #call(['rm', fname])
   return audio
 
@@ -81,10 +77,8 @@ class UpNet(nn.Module):
         self.input_length = input_length
         self.output_length = output_length
 
-        n_filters = [128, 256, 512, 512]
+        n_filters =     [128, 256, 512, 512]
         n_filtersizes = [65, 33, 17, 9, 9, 9, 9, 9, 9]
-
-        print('Generating model')
 
         # Downsampling layers
         self.conv_before = []
@@ -106,45 +100,92 @@ class UpNet(nn.Module):
         for i, (l, nf, fs) in enumerate(reversed(list(zip(
                 range(num_layers), n_filters, n_filtersizes
         )))):
-              # (-1, n/2, 2f)
             if i == 0:
               conv = nn.Conv1d(n_filters[-1], 2 * nf, fs)
             else:
-              conv = nn.Conv1d(n_filters[-i], 2*nf, fs)
+              conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
             subpixel = nn.PixelShuffle(2)
             self.up_convs.append((conv,subpixel))
-            
-            # x = BatchNormalization()(x)
-            # x = Dropout(0.5)(x)
-            # x = Activation('relu')(x)
-            
-            # (-1, n, f)
-            # subpix = SubPixel1D(x, 2)
-            # x = merge.concatenate([x, l_in], axis=1) 
-            # (-1, n, 2f)
 
         # final conv layer
         self.final_conv = nn.Conv1d(n_filters[0], 2, 9)
-        self.output_fc = nn.Linear(2968, output_length)
+        self.output_fc = nn.Linear(self.fc_dimensions(n_filters, n_filtersizes), output_length)
 
-          # x = SubPixel1D(x, 2)
-          # print(x.size())
+        print(self.fc_dimensions(n_filters, n_filtersizes))
 
 
-        # self.predictions = Dense(output_length, input_shape=x.get_shape())(x)
-        
-        # self.output = x
-        # self.model = Model(inputs=self.input, outputs=self.predictions)
+    def fc_dimensions(self, n_filters, n_filtersizes):
+        def conv_dims(w, k, s, p=0):
+            out = (w - k + 2 * p) / s + 1.0
+            out = int(out)
+            return out
+
+        def subpixel_dims(shape, r):
+            H = 1
+            _, C, W = shape
+            shape = [1, C / pow(r, 2), H * r, W * r]
+            return shape[1:]
+
+        # self.input_length = 8000
+        shape = [1, 1, self.input_length]
+
+        dl = []
+
+        # down convs
+        for i, (nf, fs) in enumerate(zip(n_filters, n_filtersizes)):
+            _, _, w = shape
+            cd = conv_dims(w=w, k=fs, s=2)
+            dl.append(cd)
+            shape = [1, nf, cd]
+
+        # bottleneck with conv
+        _, _, w = shape
+        shape = [1, n_filters[-1], conv_dims(w=w, k=n_filtersizes[-1], s=2)]
+
+        # upsample
+        for i, (nf, fs, cd) in enumerate(reversed(list(zip(n_filters, n_filtersizes, dl)))):
+            _, _, w = shape
+
+            # up conv
+            shape = [1, 2 * nf, conv_dims(w=w, k=fs, s=1)]
+
+            # subpixel
+            C, H, W = subpixel_dims(shape, 2)
+
+            # view
+            C, H, W = (1, C * H, W)
+
+            # cat
+            C, H, W = (C, H, W + cd)
+
+            shape = [C, H, W]
+
+        # final conv
+        _, _, w = shape
+        w = conv_dims(w=w, k=9, s=1)
+
+        return w * 2
+
+
+
+
+
+
 
     def forward(self, x):
-      x = x[:,:,:self.input_length]
+
+      x = x[:, :, :self.input_length]
+
       downsampling_l = [x]
+
       for conv in self.conv_before:
         x = F.leaky_relu(conv(x))
         downsampling_l.append(x)
+
       x = self.bottleneck(x)
       x = self.bottleneck_dropout(x)
       x = self.bottleneck_bn(x)
+
       for i, (conv, subpixel) in enumerate(self.up_convs):
         x = conv(x)
         x = x.unsqueeze(2)
@@ -152,15 +193,17 @@ class UpNet(nn.Module):
         x = x.view(1, 2*x.size()[0], x.size()[2])
         l_in = downsampling_l[len(downsampling_l) - 1 - i]
         x = torch.cat((x, l_in), -1)
+
       x = self.final_conv(x)
       x = SubPixel1D(x, 2)
       x = x.view(x.size()[0], x.size()[1])
-      x = self.output_fc(x)
-      return x 
 
+      x = self.output_fc(x)
+
+      return x
 
 def load_files():
-    
+
   # Initialize list of available data
   input_directory = ROOTDIR + 'wav_{}/'.format(INPUT_SAMPLE_RATE)
   output_directory = ROOTDIR + 'wav_{}/'.format(OUTPUT_SAMPLE_RATE)
@@ -170,21 +213,23 @@ def load_files():
   #fs = Fileserver()
   #print("Done Loading")
 
-  
-  #fs.cd('overfit_wav_input')
-  #print(fs.ls())
-  input_files = [load_raw_input(input_directory + fn) for fn in input_dir]
-  #fs.cd('../overfit_wav_output')
-  output_files = [load_raw_input(output_directory + fn) for fn in output_dir]
-  print(len(input_files[0]))
-  # assert len(input_files) == len(output_files)
-  # assert all([fn.endswith('.wav') for fn in input_files + output_files])
+  # input_files = [load_raw_input(input_directory + fn) for fn in input_dir]
+  # output_files = [load_raw_input(output_directory + fn) for fn in output_dir]
+
+  input_files = []
+  output_files = []
+  for i, (ifn, ofn) in enumerate(zip(input_dir, output_dir)):
+      input_files.append(load_raw_input(input_directory + ifn))
+      output_files.append(load_raw_input(output_directory + ofn))
+      if i == 0: break
+
+
+  print("number of input files", len(input_files))
+
   pairs = list(zip(input_files, output_files))
   random.seed(0)
   random.shuffle(pairs)
   return input_files, output_files
-   
-    # Train
 
 def load_model(model_name=None):
   if model_name is None:
@@ -209,6 +254,7 @@ def train(model_data, data, num_epochs = 1000):
   for epoch in range(num_epochs):
     # Training
     print('epoch {}'.format(epoch))
+
     for input_file, output_file in zip(input_files, output_files):
         # Transfer to GPU
         model.train()
@@ -219,10 +265,15 @@ def train(model_data, data, num_epochs = 1000):
         input_file = input_file.view(1, 1, input_file.size()[0])
         output_file = torch.from_numpy(output_file).float()
         output_file = output_file[:OUTPUT_SAMPLE_RATE*SAMPLE_LENGTH]
+
+        print("Forward")
         outputs = model.forward(input_file)
+        print("Loss")
         loss = criterion(outputs, output_file)
         # Backward and optimize
+        print("Backward")
         loss.backward()
+        print("Step")
         optimizer.step()
 
         if (i) % 10 == 0:
@@ -230,9 +281,9 @@ def train(model_data, data, num_epochs = 1000):
             print ('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}'
                    .format(epoch+1, num_epochs, i+1, len(input_files), loss.item()))
         i = i + 1
-           
+
     scheduler.step()
-   
+
 
 
 def eval():
