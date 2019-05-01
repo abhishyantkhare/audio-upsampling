@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import time
 import wave
 
 import scipy.io.wavfile
@@ -19,6 +20,7 @@ class WavData(torch.utils.data.Dataset):
         :param sample_length: Length of model input in seconds
         :param path: Path to wav_<Hz>/ folders
         """
+        t = time.time()
         print("Initializing loader")
         assert (sample_length * input_rate).is_integer()
         assert (sample_length * output_rate).is_integer()
@@ -47,6 +49,7 @@ class WavData(torch.utils.data.Dataset):
             (self.input_rate, self.input_path),
             (self.output_rate, self.output_path)
         ]:
+            print("Indexing", r)
             min_length = float('inf')
             if r not in self.file_sizes:
                 for fn in self.filenames:
@@ -63,7 +66,7 @@ class WavData(torch.utils.data.Dataset):
         )
 
         self.cache = [None, None, None]
-        print("Loader initialized")
+        print("Loader initialized", time.time() - t)
 
     def __len__(self):
         return len(self.filenames) * self.samples_per_file
