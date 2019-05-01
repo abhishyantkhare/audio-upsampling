@@ -29,11 +29,11 @@ ROOTDIR = '/Users/nicholascai/bdisk/BRIANDISK/tensorpros/fma_small/'
 # Modify network so it adds in Leaky Relu and Batchnorm and Dropout after the convolutional layers, as per the paper: https://arxiv.org/pdf/1708.00853.pdf
 
 DTYPE_RANGES = {
-    np.float32: (-1.0, 1.0), np.int32: (-2147483648, 2147483647),
+    np.dtype('float32'): (-1.0, 1.0), np.dtype('int32'): (-2147483648, 2147483647),
     np.dtype('int16'): (-32768, 32767), np.dtype('uint8'): (0, 255)
 }
 BITS_TO_DTYPE = {
-    64: np.float32, 32: np.int32, 16: np.dtype('int16'), 8: np.dtype('uint8')
+    64: np.dtype('float32'), 32: np.dtype('int32'), 16: np.dtype('int16'), 8: np.dtype('uint8')
 }
 
 
@@ -55,13 +55,11 @@ def SubPixel1D(I, r):
 
 def load_raw_input(fname):
   # Reduce bitrate of audio
-
-
   fs_rate, audio = wavfile.read(fname)
-  new_dtype = BITS_TO_DTYPE[8]
-  if new_dtype != audio.dtype:
-      current_range, new_range = DTYPE_RANGES[audio.dtype], DTYPE_RANGES[new_dtype]
-      audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
+  # new_dtype = BITS_TO_DTYPE[8]
+  # if new_dtype != audio.dtype:
+  #     current_range, new_range = DTYPE_RANGES[audio.dtype], DTYPE_RANGES[new_dtype]
+  #     audio = ((audio - current_range[0]) / (current_range[1] - current_range[0]) * (new_range[1] - new_range[0]) + new_range[0]).astype(new_dtype)
   #Each sample is SPLIT length long, so we need to split into chunks of SPLIT * 2
   print("Done loading", fname)
   #call(['rm', fname])
