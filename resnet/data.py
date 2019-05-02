@@ -22,6 +22,7 @@ class WavData(torch.utils.data.Dataset):
         """
         t = time.time()
         print("Initializing loader")
+        sample_length = float(sample_length)
         assert (sample_length * input_rate).is_integer()
         assert (sample_length * output_rate).is_integer()
 
