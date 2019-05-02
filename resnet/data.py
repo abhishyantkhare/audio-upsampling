@@ -49,9 +49,10 @@ class WavData(torch.utils.data.Dataset):
             (self.input_rate, self.input_path),
             (self.output_rate, self.output_path)
         ]:
-            print("Indexing", r)
+            r = str(r)
             min_length = float('inf')
             if r not in self.file_sizes:
+                print("Indexing", r)
                 for fn in self.filenames:
                     with contextlib.closing(wave.open(p + fn, 'r')) as fp:
                         min_length = min(fp.getnframes(), min_length)
@@ -61,8 +62,8 @@ class WavData(torch.utils.data.Dataset):
                     json.dump(self.file_sizes, fp)
 
         self.samples_per_file = min(
-            self.file_sizes[self.input_rate] // self.input_sample_size,
-            self.file_sizes[self.output_rate] // self.output_sample_size
+            self.file_sizes[str(self.input_rate)] // self.input_sample_size,
+            self.file_sizes[str(self.output_rate)] // self.output_sample_size
         )
 
         self.cache = [None, None, None]
