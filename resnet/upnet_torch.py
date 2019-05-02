@@ -15,7 +15,8 @@ INPUT_LEN = INPUT_SAMPLE_RATE * SAMPLE_LENGTH
 OUTPUT_LEN = OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH
 
 # ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
-ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
+#ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
+ROOTDIR = '/home/abhishyant/data/'
 
 # Mount Brian's disk with curlftpfs :
 #   Install curlftpfs with Homebrew
@@ -277,7 +278,7 @@ train(model_data, train_dl, val_dl)
 
 
 if __name__ == "__main__":
-    dataset = WavData(8000, 44100, 0.5, ROOTDIR)
+    dataset = WavData(INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, SAMPLE_LENGTH, ROOTDIR)
 
     train_len = int(len(dataset) * 0.8)
     eval_len = len(dataset) - train_len
