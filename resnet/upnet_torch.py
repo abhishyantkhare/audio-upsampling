@@ -17,8 +17,8 @@ INPUT_LEN = INPUT_SAMPLE_RATE * SAMPLE_LENGTH
 OUTPUT_LEN = OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH
 
 # ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
-# ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
-ROOTDIR = '/home/abhishyant/data/'
+ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
+# ROOTDIR = '/home/abhishyant/data/'
 
 # Mount Brian's disk with curlftpfs :
 #   Install curlftpfs with Homebrew
@@ -277,11 +277,12 @@ def train(model_data, data, val_data, num_epochs=1000):
 if __name__ == "__main__":
     dataset = WavData(INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, SAMPLE_LENGTH, ROOTDIR)
 
-    train_len = int(len(dataset) * 0.8)
-    eval_len = len(dataset) - train_len
+    dataset_len = len(dataset)
+    train_len = int(dataset_len * 0.8)
+    eval_len = dataset_len - train_len
 
-    train_dataset = Subset(dataset, (0, train_len))
-    eval_dataset = Subset(dataset, (train_len, eval_len))
+    train_dataset = Subset(dataset, list(range(train_len)))
+    eval_dataset = Subset(dataset, list(range(train_len, eval_len + train_len)))
 
     train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
     val_dl = DataLoader(eval_dataset, batch_size=32, shuffle=True, num_workers=4)
