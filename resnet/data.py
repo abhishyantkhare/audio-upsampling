@@ -22,6 +22,7 @@ class WavData(torch.utils.data.Dataset):
         """
         t = time.time()
         print("Initializing loader")
+        sample_length = float(sample_length)
         assert (sample_length * input_rate).is_integer()
         assert (sample_length * output_rate).is_integer()
 
@@ -73,14 +74,14 @@ class WavData(torch.utils.data.Dataset):
         return len(self.filenames) * self.samples_per_file
 
     def __getitem__(self, index):
-        filename = self.filenames[index]
+        filename = self.filenames[index // self.samples_per_file]
         if self.cache[0] != filename:
             self.cache[0] = filename
             _, input_wav = scipy.io.wavfile.read(self.input_path + filename)
             _, output_wav = scipy.io.wavfile.read(self.output_path + filename)
             self.cache[1] = input_wav[:self.samples_per_file * self.input_sample_size].reshape((self.samples_per_file, -1))
             self.cache[2] = output_wav[:self.samples_per_file * self.output_sample_size].reshape((self.samples_per_file, -1))
-        return self.cache[1][index], self.cache[2][index]
+        return self.cache[1][index % self.samples_per_file], self.cache[2][index % self.samples_per_file]
 
 
 if __name__ == "__main__":

@@ -6,18 +6,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 from torch.utils.data import DataLoader, Subset
+from scipy.io import wavfile 
 
 from data import WavData
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100
-SAMPLE_LENGTH = 1
+SAMPLE_LENGTH = .1
 
-INPUT_LEN = INPUT_SAMPLE_RATE * SAMPLE_LENGTH
-OUTPUT_LEN = OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH
+INPUT_LEN = int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH)
+OUTPUT_LEN = int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH)
 
+#ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
 # ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
-# ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
+#ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
 ROOTDIR = '/home/abhishyant/data/'
 
 # Mount Brian's disk with curlftpfs :
@@ -105,7 +107,7 @@ class UpNet(nn.Module):
                 do = nn.Dropout(p=.1)
             else:
                 conv = nn.Conv1d(n_filters[-i], 2 * nf, fs)
-                bn = nn.BatchNorm1d(nf)
+                bn = nn.BatchNorm1d(2*nf)
                 do = nn.Dropout(p=.1)
             subpixel = nn.PixelShuffle(2)
             self.up_convs.append((conv, subpixel, bn, do))
@@ -186,8 +188,8 @@ class UpNet(nn.Module):
         for i, (conv, subpixel, bn, do) in enumerate(self.up_convs):
             x = do(bn(conv(x).to(device)).to(device)).to(device)
             x = x.unsqueeze(2)
-            x = subpixel(x)[0]
-            x = x.view(1, 2 * x.size()[0], x.size()[2])
+            x = subpixel(x)
+            x = x.view(-1, x.size()[2] * x.size()[1], x.size()[3])
             l_in = downsampling_l[len(downsampling_l) - 1 - i]
             x = torch.cat((x, l_in), -1)
 
@@ -196,20 +198,17 @@ class UpNet(nn.Module):
         x = x.view(x.size()[0], x.size()[1])
 
         x = self.output_fc(x)
-
         return x
 
 
 def load_model(model_name=None):
-    if model_name is None:
-        # Initialize model
-        upnet = UpNet(
+    upnet = UpNet(
             int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH),
             int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH),
         ).to(device)
-    else:
+    if model_name is not None:
         # Load model from file
-        upnet = torch.load(model_name).to(device)
+        upnet.load_state_dict(torch.load(model_name))
         # Loss and optimizer
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(upnet.parameters(), lr=1e-3, weight_decay=.01)
@@ -219,47 +218,68 @@ def load_model(model_name=None):
 
 def train(model_data, data, val_data, num_epochs=1000):
     model, criterion, optimizer, scheduler = model_data
-    i = 0
     for epoch in range(num_epochs):
         # Training
         print('epoch {}'.format(epoch))
         for i, (input_file, output_file) in enumerate(data):
 
             # Transfer to GPU
-            input_file = input_file.to(device)
-            output_file = output_file.to(device)
+            input_file = input_file.to(device).float()
+            input_file = input_file.unsqueeze(1)
+            output_file = output_file.to(device).float()
 
             model.train()
             optimizer.zero_grad()
 
             # Forward pass
             outputs = model.forward(input_file)
-            print("Loss")
             loss = criterion(outputs, output_file)
             # Backward and optimize
-            print("Backward")
             loss.backward()
-            print("Step")
             optimizer.step()
 
             if (i) % 100 == 0:
                 val_input, val_output = val_data.__iter__().__next__()
-                val_input.to(device)
-                val_output.to(device)
+                val_input = val_input.to(device).float()
+                val_input = val_input.unsqueeze(1)
+                val_output = val_output.to(device).float()
+
                 model.eval()
                 outputs = model.forward(val_input)
                 val_loss = criterion(outputs, val_output)
-                with open('train_log.txt', 'w') as f:
-                    f.write('{}, {}'.format(i, loss.item()))
-                with open('val_log.txt', 'w') as f:
-                    f.write('{}, {}').format(i, val_loss.item())
+                subprocess.call(['rm', 'model.ckpt'])
+                torch.save(model.state_dict(), 'model.ckpt')
+                with open('train_log.txt', 'a') as f:
+                    f.write('{}, {}\n'.format(i, loss.item()))
+                with open('val_log.txt', 'a') as f:
+                    f.write('{}, {}\n'.format(i, val_loss.item()))
                 print('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}, Val Loss: {:.4f}'
                       .format(epoch + 1, num_epochs, i + 1, len(data), loss.item(), val_loss.item()))
             i = i + 1
 
         scheduler.step()
-        subprocess.call(['rm', 'model.ckpt'])
-        torch.save(model.state_dict(), 'model.ckpt')
+
+def upsample(model, file):
+    fs, audio = wavfile.read(file)
+    end_lim = int((len(audio) // INPUT_LEN) * INPUT_LEN)
+    audio = audio[:end_lim]
+    upsampled_audio = np.asarray([])
+    print("Beginning Upsampling")
+    for i in range(0, len(audio), INPUT_LEN):
+        model.eval()
+        torch.no_grad()
+        input_chunk = audio[i:i+INPUT_LEN]
+        input_chunk = torch.from_numpy(input_chunk)
+        input_chunk = input_chunk.to(device).float()
+        input_chunk = input_chunk.unsqueeze(0)
+        input_chunk = input_chunk.unsqueeze(1)
+        output_chunk = model.forward(input_chunk)
+        output_chunk = output_chunk.view(OUTPUT_LEN).detach().numpy()
+        upsampled_audio = np.append(upsampled_audio, output_chunk)
+        print("Upsampled chunk {} out of {}".format(i // INPUT_LEN, end_lim // INPUT_LEN))
+    print(upsampled_audio.min(), upsampled_audio.max())
+    upsampled_audio = upsampled_audio.astype(np.uint8)
+    wavfile.write('upsampled_' + file, OUTPUT_SAMPLE_RATE, upsampled_audio)
 
 
 # train_input_dir = 'wav_{}/'.format(INPUT_SAMPLE_RATE)
@@ -275,16 +295,19 @@ def train(model_data, data, val_data, num_epochs=1000):
 # train(model_data, train_dl, val_dl)
 
 if __name__ == "__main__":
-    dataset = WavData(INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, SAMPLE_LENGTH, ROOTDIR)
+    # dataset = WavData(INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, SAMPLE_LENGTH, ROOTDIR)
 
-    train_len = int(len(dataset) * 0.8)
-    eval_len = len(dataset) - train_len
+    # dataset_len = len(dataset)
+    # train_len = int(dataset_len * 0.8)
+    # eval_len = dataset_len - train_len
 
-    train_dataset = Subset(dataset, (0, train_len))
-    eval_dataset = Subset(dataset, (train_len, eval_len))
+    # train_dataset = Subset(dataset, list(range(train_len)))
+    # eval_dataset = Subset(dataset, list(range(train_len, eval_len + train_len)))
 
-    train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
-    val_dl = DataLoader(eval_dataset, batch_size=32, shuffle=True, num_workers=4)
+    # train_dl = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
+    # val_dl = DataLoader(eval_dataset, batch_size=8, shuffle=True, num_workers=4)
 
-    model_data = load_model()
-    train(model_data, train_dl, val_dl)
+    model_data = load_model('model.ckpt')
+    train(model_data, train_dl, val_dl, num_epochs=1)
+    # upsample(model_data[0], "000002.wav")
+
