@@ -12,14 +12,16 @@ from data import WavData
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100
-SAMPLE_LENGTH = .1
+SAMPLE_LENGTH = 0.5
+BATCH_SIZE = 8
+NUM_WORKERS = 4
 
 INPUT_LEN = int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH)
 OUTPUT_LEN = int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH)
 
 #ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
 # ROOTDIR = '/home/abhishyant/bdisk/BRIANDISK/tensorpros/fma_small/'
-ROOTDIR = '/Users/brianlevis/cs182/audio-upsampling/data'
+ROOTDIR = '/pylon5/sc5fp4p/blevis/data'
 # ROOTDIR = '/home/abhishyant/data/'
 
 # Mount Brian's disk with curlftpfs :
@@ -218,6 +220,7 @@ def load_model(model_name=None):
 
 def train(model_data, data, val_data, num_epochs=1000):
     model, criterion, optimizer, scheduler = model_data
+    model.cuda()
     for epoch in range(num_epochs):
         # Training
         print('epoch {}'.format(epoch))
@@ -304,10 +307,10 @@ if __name__ == "__main__":
     train_dataset = Subset(dataset, list(range(train_len)))
     eval_dataset = Subset(dataset, list(range(train_len, eval_len + train_len)))
 
-    train_dl = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
-    val_dl = DataLoader(eval_dataset, batch_size=8, shuffle=True, num_workers=4)
+    train_dl = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+    val_dl = DataLoader(eval_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
 
-    model_data = load_model('model.ckpt')
+    model_data = load_model(None)
     train(model_data, train_dl, val_dl, num_epochs=1)
     # upsample(model_data[0], "000002.wav")
 

@@ -76,6 +76,7 @@ class WavData(torch.utils.data.Dataset):
     def __getitem__(self, index):
         filename = self.filenames[index // self.samples_per_file]
         if self.cache[0] != filename:
+            print('caching', filename)
             self.cache[0] = filename
             _, input_wav = scipy.io.wavfile.read(self.input_path + filename)
             _, output_wav = scipy.io.wavfile.read(self.output_path + filename)
