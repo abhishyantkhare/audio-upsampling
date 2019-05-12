@@ -90,6 +90,9 @@ class UpNet(nn.Module):
                 conv = nn.Conv1d(n_filters[i - 1], nf, fs, stride=2)
                 bn = nn.BatchNorm1d(nf)
                 do = nn.Dropout(p=0.1)
+            conv.to(device)
+            bn.to(device)
+            do.to(device)
             self.conv_before.append((conv, bn, do))
 
         # bottleneck layer
@@ -173,7 +176,6 @@ class UpNet(nn.Module):
         return w * 2
 
     def forward(self, x):
-
         x = x[:, :, :self.input_length]
 
         downsampling_l = [x]
@@ -220,7 +222,6 @@ def load_model(model_name=None):
 
 def train(model_data, data, val_data, num_epochs=1000):
     model, criterion, optimizer, scheduler = model_data
-    model.cuda()
     for epoch in range(num_epochs):
         # Training
         print('epoch {}'.format(epoch))
