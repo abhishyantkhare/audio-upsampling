@@ -90,15 +90,16 @@ class UpNet(nn.Module):
                 conv = nn.Conv1d(n_filters[i - 1], nf, fs, stride=2)
                 bn = nn.BatchNorm1d(nf)
                 do = nn.Dropout(p=0.1)
-            conv.to(device)
-            bn.to(device)
-            do.to(device)
+            # ATTENTION: NOT CROSS PLATFORM- CHANGE TO TO(DEVICE)
+            conv.cuda()
+            bn.cuda()
+            do.cuda()
             self.conv_before.append((conv, bn, do))
 
         # bottleneck layer
-        self.bottleneck = nn.Conv1d(n_filters[-1], n_filters[-1], n_filtersizes[-1], stride=2)
-        self.bottleneck_dropout = nn.Dropout(p=0.5)
-        self.bottleneck_bn = nn.BatchNorm1d(n_filters[-1])
+        self.bottleneck = nn.Conv1d(n_filters[-1], n_filters[-1], n_filtersizes[-1], stride=2).to(device)
+        self.bottleneck_dropout = nn.Dropout(p=0.5).to(device)
+        self.bottleneck_bn = nn.BatchNorm1d(n_filters[-1]).to(device)
         # x = LeakyReLU(0.2)(x)
 
         # upsampling layers
@@ -115,6 +116,10 @@ class UpNet(nn.Module):
                 bn = nn.BatchNorm1d(2*nf)
                 do = nn.Dropout(p=.1)
             subpixel = nn.PixelShuffle(2)
+            conv.cuda()
+            subpixel.cuda()
+            bn.cuda()
+            do.cuda()
             self.up_convs.append((conv, subpixel, bn, do))
 
         # final conv layer
@@ -181,8 +186,8 @@ class UpNet(nn.Module):
         downsampling_l = [x]
 
         for (conv, bn, do) in self.conv_before:
-            x = F.leaky_relu(conv(x).to(device)).to(device)
-            x = do(bn(x).to(device)).to(device)
+            x = F.leaky_relu(conv(x))
+            x = do(bn(x))
             downsampling_l.append(x)
 
         x = self.bottleneck(x).to(device)
@@ -222,6 +227,7 @@ def load_model(model_name=None):
 
 def train(model_data, data, val_data, num_epochs=1000):
     model, criterion, optimizer, scheduler = model_data
+    model.cuda()
     for epoch in range(num_epochs):
         # Training
         print('epoch {}'.format(epoch))
@@ -311,7 +317,7 @@ if __name__ == "__main__":
     train_dl = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
     val_dl = DataLoader(eval_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
 
-    model_data = load_model(None)
+    model_data = load_model('model.ckpt')
     train(model_data, train_dl, val_dl, num_epochs=1)
     # upsample(model_data[0], "000002.wav")
 
