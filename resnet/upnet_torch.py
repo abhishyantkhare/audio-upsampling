@@ -12,9 +12,12 @@ from data import WavData
 
 INPUT_SAMPLE_RATE = 8000
 OUTPUT_SAMPLE_RATE = 44100
-SAMPLE_LENGTH = 0.5
-BATCH_SIZE = 8
-NUM_WORKERS = 4
+SAMPLE_LENGTH = 0.2
+BATCH_SIZE = 20
+NUM_WORKERS = 2
+
+RESUME = 0 # 46301
+SHUFFLE = True
 
 INPUT_LEN = int(INPUT_SAMPLE_RATE * SAMPLE_LENGTH)
 OUTPUT_LEN = int(OUTPUT_SAMPLE_RATE * SAMPLE_LENGTH)
@@ -232,7 +235,7 @@ def train(model_data, data, val_data, num_epochs=1000):
         # Training
         print('epoch {}'.format(epoch))
         for i, (input_file, output_file) in enumerate(data):
-
+            i += RESUME
             # Transfer to GPU
             input_file = input_file.to(device).float()
             input_file = input_file.unsqueeze(1)
@@ -310,12 +313,11 @@ if __name__ == "__main__":
     dataset_len = len(dataset)
     train_len = int(dataset_len * 0.8)
     eval_len = dataset_len - train_len
-
-    train_dataset = Subset(dataset, list(range(train_len)))
+    train_dataset = Subset(dataset, list(range(RESUME, train_len)))
     eval_dataset = Subset(dataset, list(range(train_len, eval_len + train_len)))
 
-    train_dl = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
-    val_dl = DataLoader(eval_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+    train_dl = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
+    val_dl = DataLoader(eval_dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE, num_workers=NUM_WORKERS)
 
     model_data = load_model('model.ckpt')
     train(model_data, train_dl, val_dl, num_epochs=1)

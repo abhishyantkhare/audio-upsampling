@@ -81,8 +81,6 @@ class WavData(torch.utils.data.Dataset):
             _, output_wav = scipy.io.wavfile.read(self.output_path + filename)
             self.cache[1] = input_wav[:self.samples_per_file * self.input_sample_size].reshape((self.samples_per_file, -1))
             self.cache[2] = output_wav[:self.samples_per_file * self.output_sample_size].reshape((self.samples_per_file, -1))
-        else:
-            print('cache hit!')
         return self.cache[1][index % self.samples_per_file], self.cache[2][index % self.samples_per_file]
 
 
